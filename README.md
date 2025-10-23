@@ -7,7 +7,8 @@ You can interact with it using natural language to run data exploration and inte
 
 ## 📊 Sample Dataset
 
-For this project, you can use the classic datasets, nyc_taxi_wide.parquet, auto_accidents.arrow, or 146M_predicitions_v2.arrow 
+For this project, you can use the classic datasets, [nyc_taxi_wide.parquet](https://s3.amazonaws.com/datashader-data/nyc_taxi_wide.parq
+), [auto_accidents.arrow](https://data.rapids.ai/viz-data/auto_accidents.arrow.gz), or [146M_predicitions_v2.arrow](https://data.rapids.ai/viz-data/146M_predictions_v2.arrow.gz) 
 
 Download the dataset and place it in the `data/` directory before running the agent.
 
