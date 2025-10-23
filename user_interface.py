@@ -1,48 +1,35 @@
-# viz_user_interface.py - Streamlit UI for Cuxfilter Dashboard Agent
+# user_interface.py
+"""
+Streamlit User Interface for Visualization Agent
+Two-column layout with file management on left, chat on right
+"""
+
 import streamlit as st
+import streamlit.components.v1 as components
+from pathlib import Path
+import sys
 import pandas as pd
 import tempfile
 import os
-import io
-from contextlib import redirect_stdout, redirect_stderr
 import time
-from functools import wraps
+from contextlib import redirect_stdout, redirect_stderr
+import io
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.chat_agent import ChatAgent
+from src.tools.exp_store import VizExperimentStore
 
-# ============= TIMING DECORATOR =============
-def track_execution_time(method_name):
-    """Decorator to track and display execution time for dashboard methods"""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            print(f"Starting {method_name}...")
-            
-            result = func(*args, **kwargs)
-            
-            execution_time = time.time() - start_time
-            
-            if execution_time < 60:
-                time_str = f"{execution_time:.2f} seconds"
-            else:
-                minutes = int(execution_time // 60)
-                seconds = execution_time % 60
-                time_str = f"{minutes} min {seconds:.1f} sec"
-            
-            print(f"\nTotal execution time for {method_name}: {time_str}")
-            print(f"{method_name} completed successfully!")
-            
-            return result
-        return wrapper
-    return decorator
+# ============================================================================
+# PAGE CONFIG
+# ============================================================================
 
-# Monkey-patch ChatAgent methods for timing
-if "timing_patched" not in st.session_state:
-    st.session_state.timing_patched = True
-# ============= END TIMING DECORATOR =============
-
-st.set_page_config(page_title="Dashboard Agent", page_icon="📊", layout="wide")
+st.set_page_config(
+    page_title="Dashboard Agent", 
+    page_icon="📊", 
+    layout="wide"
+)
 
 # Custom CSS
 st.markdown("""
@@ -74,20 +61,37 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if "viz_agent" not in st.session_state:
-    st.session_state.viz_agent = ChatAgent()
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "uploaded_files" not in st.session_state:
-    st.session_state.uploaded_files = {}
-if "dashboard_created" not in st.session_state:
-    st.session_state.dashboard_created = False
+# ============================================================================
+# SESSION STATE
+# ============================================================================
 
-# Layout
-left_col, right_col = st.columns([3, 7])
+def init_session_state():
+    """Initialize Streamlit session state."""
+    if 'agent' not in st.session_state:
+        exp_store = VizExperimentStore()
+        st.session_state.agent = ChatAgent(exp_store=exp_store)
+    
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+    
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = {}
+    
+    if 'dashboard_created' not in st.session_state:
+        st.session_state.dashboard_created = False
+    
+    if 'is_processing' not in st.session_state:
+        st.session_state.is_processing = False
+    
+    if 'pending_input' not in st.session_state:
+        st.session_state.pending_input = None
 
-with left_col:
+# ============================================================================
+# LEFT COLUMN - FILE MANAGEMENT
+# ============================================================================
+
+def render_left_column():
+    """Render left column with file management."""
     st.header("📊 Dashboard Agent")
     st.markdown("*GPU-Accelerated Interactive Dashboards*")
     
@@ -98,15 +102,14 @@ with left_col:
         help="Use File Path for files > 200MB"
     )
     
-    # FIX: Initialize uploaded_files to avoid NameError
     uploaded_files = None
     
+    # ========== FILE PATH METHOD ==========
     if data_method == "📁 File Path (for large files)":
-        # File path input
         st.subheader("📁 Load from File Path")
         file_path = st.text_input(
             "Enter file path",
-            placeholder="./data/auto_accidents.arrow",
+            placeholder="./data/sales_data.csv",
             help="Full or relative path to your data file"
         )
         
@@ -136,13 +139,14 @@ with left_col:
                             'columns': list(df.columns)
                         }
                         
-                        # Register with agent
-                        st.session_state.viz_agent.uploaded_files[file_name] = file_path
-                        base_name = file_name.split('.')[0]
-                        st.session_state.viz_agent.uploaded_files[base_name] = file_path
+                        # Load data into viz_tools
+                        result = st.session_state.agent.viz_tools.load_data(file_path)
                         
-                        st.success(f"✅ Loaded {file_name}")
-                        st.rerun()
+                        if result['success']:
+                            st.success(f"✅ Loaded {file_name}")
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {result['error']}")
                         
                     except Exception as e:
                         st.error(f"Error loading file: {str(e)}")
@@ -151,8 +155,8 @@ with left_col:
             else:
                 st.error(f"File not found: {file_path}")
     
+    # ========== FILE UPLOAD METHOD ==========
     else:
-        # Original file upload
         uploaded_files = st.file_uploader(
             "Upload Datasets", 
             type=['csv', 'parquet', 'arrow'], 
@@ -160,7 +164,7 @@ with left_col:
             help="Upload CSV, Parquet, or Arrow files (max 200MB each)"
         )
     
-    # Process uploaded files (only if files were uploaded)
+    # Process uploaded files
     if uploaded_files:
         st.subheader("📁 Uploaded Files")
         
@@ -194,18 +198,16 @@ with left_col:
                     st.session_state.uploaded_files[file_key]['shape'] = df.shape
                     st.session_state.uploaded_files[file_key]['columns'] = list(df.columns)
                     
-                    # Register file with viz agent
-                    st.session_state.viz_agent.uploaded_files[uploaded_file.name] = tmp_path
-                    
-                    # Also register without extension
-                    base_name = uploaded_file.name.split('.')[0]
-                    st.session_state.viz_agent.uploaded_files[base_name] = tmp_path
+                    # Load into viz_tools
+                    result = st.session_state.agent.viz_tools.load_data(tmp_path)
                     
                 except Exception as e:
                     st.error(f"Error loading {uploaded_file.name}: {str(e)}")
                     continue
-        
-        # Display file info
+    
+    # Display file info
+    if st.session_state.uploaded_files:
+        st.divider()
         for file_key, file_info in st.session_state.uploaded_files.items():
             if 'shape' in file_info:
                 shape = file_info['shape']
@@ -215,179 +217,122 @@ with left_col:
                     col1, col2 = st.columns([3, 1])
                     with col1:
                         st.write(f"**{file_info['name']}**")
-                        st.caption(f"{shape[0]:,} rows × {shape[1]} cols | {size_mb:.2f} MB")
+                        st.caption(f"{shape[0]:,} rows × {shape[1]} columns | {size_mb:.1f} MB")
                     with col2:
-                        if st.button("📋", key=f"copy_{file_key}", help="Copy filename"):
-                            st.code(file_info['name'])
+                        if st.button("🗑️", key=f"del_{file_key}"):
+                            # Remove from session
+                            del st.session_state.uploaded_files[file_key]
+                            # Remove temp file
+                            if os.path.exists(file_info['path']):
+                                try:
+                                    os.unlink(file_info['path'])
+                                except:
+                                    pass
+                            st.rerun()
                 
                 # Show columns in expander
-                with st.expander(f"Columns", expanded=False):
-                    cols_text = ", ".join(file_info['columns'])
-                    st.text(cols_text)
-        
-        # Show helpful message
-        st.info("💡 To load a file, type: `load data filename.arrow`")
-        
-        # Show example for first file
-        if st.session_state.uploaded_files:
-            first_file = list(st.session_state.uploaded_files.values())[0]
-            st.code(f"load data {first_file['name']}")
+                with st.expander(f"Columns ({len(file_info['columns'])})"):
+                    for col in file_info['columns'][:20]:  # Show first 20
+                        st.text(f"• {col}")
+                    if len(file_info['columns']) > 20:
+                        st.caption(f"... and {len(file_info['columns']) - 20} more")
     
-    # Display file info for files loaded via path method
-    elif st.session_state.uploaded_files and data_method == "📁 File Path (for large files)":
-        st.subheader("📁 Loaded Files")
-        for file_key, file_info in st.session_state.uploaded_files.items():
-            if 'shape' in file_info:
-                shape = file_info['shape']
-                size_mb = file_info['size'] / (1024 * 1024)
-                
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"**{file_info['name']}**")
-                        st.caption(f"{shape[0]:,} rows × {shape[1]} cols | {size_mb:.2f} MB")
-                    with col2:
-                        if st.button("📋", key=f"copy_{file_key}", help="Copy filename"):
-                            st.code(file_info['name'])
-                
-                # Show columns in expander
-                with st.expander(f"Columns", expanded=False):
-                    cols_text = ", ".join(file_info['columns'])
-                    st.text(cols_text)
-        
-        # Show helpful message
-        st.info("💡 To load a file, type: `load data filename.arrow`")
-        
-        # Show example for first file
-        if st.session_state.uploaded_files:
-            first_file = list(st.session_state.uploaded_files.values())[0]
-            st.code(f"load data {first_file['name']}")
-    
-    # Dashboard status
+    # ========== QUICK EXAMPLES ==========
     st.divider()
-    st.subheader("📈 Dashboard Status")
+    st.subheader("💡 Example Prompts")
     
-    if st.session_state.dashboard_created:
-        st.success("✅ Dashboard created")
-    else:
-        st.info("ℹ️ No dashboard yet")
+    if st.button("📊 'Analyze my data'", use_container_width=True):
+        st.session_state.pending_input = "Analyze my data"
+        st.session_state.is_processing = True
+        st.rerun()
     
-    # Check for exported dashboards
-    if os.path.exists("outputs"):
-        dashboard_files = [f for f in os.listdir("outputs") if f.endswith('.html')]
-        if dashboard_files:
-            st.write(f"**Exported:** {len(dashboard_files)} dashboard(s)")
-            with st.expander("View exports", expanded=False):
-                for df_file in dashboard_files:
-                    st.write(f"• {df_file}")
+    if st.button("📈 'Create histogram'", use_container_width=True):
+        st.session_state.pending_input = "Create a histogram of the first numeric column"
+        st.session_state.is_processing = True
+        st.rerun()
     
-    # Quick examples
+    if st.button("📊 'Build dashboard'", use_container_width=True):
+        st.session_state.pending_input = "Build a dashboard with multiple charts"
+        st.session_state.is_processing = True
+        st.rerun()
+    
+    # ========== REFERENCE DOCS ==========
     st.divider()
-    with st.expander("💡 Example Commands", expanded=False):
-        st.markdown("""
-        **Load data:**
-        ```
-        load data auto_accidents.arrow
-        load data sales.csv
-        ```
-        
-        **Create dashboard:**
-        ```
-        create dashboard with:
-        - scatter map
-        - bar chart for categories
-        - layout: feature_and_base
-        - theme: rapids_dark
-        ```
-        
-        **Quick dashboard:**
-        ```
-        create dashboard with scatter, bar, and line charts
-        use rapids_dark theme
-        ```
-        
-        **Add charts:**
-        ```
-        add heatmap and histogram
-        add filter for region column
-        ```
-        
-        **Customize:**
-        ```
-        change theme to dark
-        change layout to two_by_two
-        ```
-        
-        **Show & Export:**
-        ```
-        show dashboard
-        export dashboard to outputs/my_viz.html
-        ```
-        """)
     
     # Chart types reference
-    with st.expander("📊 Chart Types", expanded=False):
+    with st.expander("📊 Available Charts", expanded=False):
         st.markdown("""
-        **Available Charts:**
-        - `scatter` - Scatter plot (with optional map tiles)
+        **Basic Charts:**
         - `bar` - Bar chart
         - `line` - Line chart
+        - `scatter` - Scatter plot
         - `histogram` - Histogram
         - `heatmap` - Heatmap
-        - `choropleth` - Geographic map
-        - `number` - KPI/metric widget
+        
+        **Geographic:**
+        - `point_map` - Point map
+        - `hex_map` - Hexbin map
         
         **Widgets:**
-        - `multi_select` - Multi-select filter
-        - `drop_down` - Dropdown filter
         - `range_slider` - Range slider
-        - `date_range` - Date range picker
+        - `dropdown` - Dropdown selector
+        - `multi_select` - Multi-select
         """)
     
     # Layouts reference
     with st.expander("📐 Layouts", expanded=False):
         st.markdown("""
-        - `feature_and_base`
-        - `two_by_two`
-        - `three_by_three`
-        - `single_feature`
-        - `double_feature`
-        - `triple_feature`
-        - `feature_and_triple_base`
-        - And 8 more...
+        - `single_feature` - 1 chart
+        - `double_feature` - 2 charts
+        - `triple_feature` - 3 charts
+        - `quad_feature` - 4 charts
+        - `auto` - Automatic selection
         """)
     
     # Themes reference
     with st.expander("🎨 Themes", expanded=False):
         st.markdown("""
-        - `default` - Light theme
-        - `dark` - Dark theme
-        - `rapids` - Rapids light
-        - `rapids_dark` - Rapids dark
+        - `rapids_dark` - RAPIDS dark (default)
+        - `rapids` - RAPIDS light
+        - `dark` - Standard dark
+        - `light` - Standard light
         """)
 
-with right_col:
+# ============================================================================
+# RIGHT COLUMN - CHAT INTERFACE
+# ============================================================================
+
+def render_right_column():
+    """Render right column with chat interface."""
     st.header("💬 Chat with Dashboard Agent")
     
     # Control buttons
     col1, col2, col3 = st.columns([1, 1, 1])
+    
     with col1:
         if st.button("🗑️ Clear Chat"):
             st.session_state.messages = []
             st.rerun()
     
     with col2:
-        if st.button("📊 Show History"):
-            response = st.session_state.viz_agent._show_history()
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            st.rerun()
+        if st.button("ℹ️ Data Info"):
+            info = st.session_state.agent.viz_tools.get_data_info()
+            if info['success']:
+                info_msg = f"""**Data Information:**
+                
+📊 Shape: {info['shape'][0]:,} rows × {info['shape'][1]} columns
+
+**Columns:** {', '.join(info['columns'])}
+"""
+                st.session_state.messages.append({"role": "assistant", "content": info_msg})
+                st.rerun()
+            else:
+                st.warning("No data loaded")
     
     with col3:
         if st.button("📈 Stats"):
             try:
-                from src.tools.viz_exp_store import VizExperimentStore
-                store = VizExperimentStore()
-                summary = store.get_experiment_summary()
+                summary = st.session_state.agent.exp_store.get_experiment_summary()
                 
                 stats_msg = f"""**Dashboard Statistics:**
                 
@@ -400,6 +345,10 @@ with right_col:
 
 **Popular Layouts:**
 {chr(10).join([f"• {k}: {v}" for k, v in list(summary.get('layout_usage', {}).items())[:5]])}
+
+**Averages:**
+• Charts per dashboard: {summary.get('avg_charts_per_dashboard', 'N/A')}
+• Widgets per dashboard: {summary.get('avg_widgets_per_dashboard', 'N/A')}
 """
                 st.session_state.messages.append({"role": "assistant", "content": stats_msg})
                 st.rerun()
@@ -411,12 +360,6 @@ with right_col:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # Initialize flags
-    if "is_processing" not in st.session_state:
-        st.session_state.is_processing = False
-    if "pending_input" not in st.session_state:
-        st.session_state.pending_input = None
-
     # Show input only if not processing
     if not st.session_state.is_processing:
         user_input = st.chat_input("Ask about dashboards or give visualization commands...")
@@ -425,12 +368,13 @@ with right_col:
             st.session_state.pending_input = user_input
             st.session_state.is_processing = True
             st.rerun()
+    
     else:
         # Process pending input
         if st.session_state.pending_input:
             user_input = st.session_state.pending_input
             st.session_state.pending_input = None
-
+            
             start_time = time.time()
             
             # Add user message
@@ -439,26 +383,28 @@ with right_col:
             # Create placeholders
             user_msg_container = st.empty()
             assistant_msg_container = st.empty()
-
+            
             # Show user message
             with user_msg_container.container():
                 with st.chat_message("user"):
                     st.markdown(user_input)
-
+            
             # Show processing message
             with assistant_msg_container.container():
                 with st.chat_message("assistant"):
                     response_placeholder = st.empty()
-                    response_placeholder.markdown("⏳ Creating your dashboard...")
-
+                    response_placeholder.markdown("⏳ Processing your request...")
+            
             captured_output = io.StringIO()
             try:
                 # Get response from agent
                 with redirect_stdout(captured_output), redirect_stderr(captured_output):
-                    response = st.session_state.viz_agent.chat(user_input)
+                    result = st.session_state.agent.chat(user_input)
+                
+                response = result['response']
                 
                 # Check if dashboard was created
-                if "create_dashboard" in user_input.lower() and "✓" in response:
+                if result.get('viz_file'):
                     st.session_state.dashboard_created = True
                 
                 # Update processing message
@@ -471,7 +417,7 @@ with right_col:
                     full_response = response + "\n\n**Output:**\n```\n" + terminal_output + "\n```"
                 else:
                     full_response = response
-
+                
                 # Add timing
                 end_time = time.time()
                 execution_time = end_time - start_time
@@ -485,12 +431,42 @@ with right_col:
                 
                 full_response += f"\n\n---\n⏱️ **Processing time: {time_str}**"
                 
-                # Stream response
-                words = full_response.split()
-                for i in range(1, len(words) + 1):
-                    partial_response = " ".join(words[:i])
-                    response_placeholder.markdown(partial_response)
-                    time.sleep(0.02)
+                # Display visualization if created
+                if result.get('viz_file'):
+                    viz_path = Path(result['viz_file'])
+                    if viz_path.exists():
+                        full_response += f"\n\n📊 **Dashboard:** {viz_path.name}"
+                        
+                        # Read and display HTML
+                        with open(viz_path, 'r', encoding='utf-8') as f:
+                            html_content = f.read()
+                        
+                        # Clear placeholder and show final response
+                        response_placeholder.empty()
+                        
+                        with assistant_msg_container.container():
+                            with st.chat_message("assistant"):
+                                st.markdown(full_response)
+                                st.subheader("📊 Interactive Dashboard")
+                                components.html(html_content, height=800, scrolling=True)
+                                
+                                # Download button
+                                st.download_button(
+                                    label="⬇️ Download Dashboard",
+                                    data=html_content,
+                                    file_name=viz_path.name,
+                                    mime="text/html"
+                                )
+                    else:
+                        full_response += "\n\n⚠️ Dashboard file not found"
+                
+                # Stream response (if no viz)
+                if not result.get('viz_file'):
+                    words = full_response.split()
+                    for i in range(1, len(words) + 1):
+                        partial_response = " ".join(words[:i])
+                        response_placeholder.markdown(partial_response)
+                        time.sleep(0.02)
                 
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
             
@@ -513,46 +489,63 @@ with right_col:
                 st.session_state.is_processing = False
                 st.rerun()
 
-# Sidebar with file reference
-if st.session_state.uploaded_files:
-    with st.sidebar:
-        st.header("📋 Quick Reference")
-        st.subheader("Uploaded Files")
-        for file_key, file_info in st.session_state.uploaded_files.items():
-            st.write(f"**{file_info['name']}**")
-            if 'shape' in file_info:
-                st.caption(f"{file_info['shape'][0]:,} × {file_info['shape'][1]}")
-        
-        st.divider()
-        
-        # Quick actions
-        st.subheader("⚡ Quick Actions")
-        
-        if st.button("🔄 Reload Agent", use_container_width=True):
-            st.session_state.viz_agent = ChatAgent()
-            st.success("Agent reloaded!")
-            time.sleep(1)
-            st.rerun()
-        
-        if st.button("📁 Open Outputs Folder", use_container_width=True):
-            if not os.path.exists("outputs"):
-                os.makedirs("outputs")
-            st.info("Outputs folder: ./outputs/")
+# ============================================================================
+# SIDEBAR
+# ============================================================================
 
-# Cleanup temp files on session end
-import atexit
+def render_sidebar():
+    """Render sidebar."""
+    if st.session_state.uploaded_files:
+        with st.sidebar:
+            st.header("📋 Quick Reference")
+            st.subheader("Loaded Files")
+            for file_key, file_info in st.session_state.uploaded_files.items():
+                st.write(f"**{file_info['name']}**")
+                if 'shape' in file_info:
+                    st.caption(f"{file_info['shape'][0]:,} × {file_info['shape'][1]}")
+            
+            st.divider()
+            
+            # Quick actions
+            st.subheader("⚡ Quick Actions")
+            
+            if st.button("🔄 Reload Agent", use_container_width=True):
+                exp_store = VizExperimentStore()
+                st.session_state.agent = ChatAgent(exp_store=exp_store)
+                st.success("Agent reloaded!")
+                time.sleep(1)
+                st.rerun()
+            
+            if st.button("📁 Open Outputs", use_container_width=True):
+                output_dir = Path("viz_outputs")
+                if not output_dir.exists():
+                    output_dir.mkdir()
+                st.info(f"Outputs folder: {output_dir.absolute()}")
+            
+            st.divider()
+            st.caption("📊 Dashboard Agent v1.0")
+            st.caption("GPU-Accelerated with RAPIDS")
 
-def cleanup_temp_files():
-    for file_info in st.session_state.get('uploaded_files', {}).values():
-        if 'path' in file_info and os.path.exists(file_info['path']):
-            try:
-                os.unlink(file_info['path'])
-            except:
-                pass
+# ============================================================================
+# MAIN
+# ============================================================================
 
-atexit.register(cleanup_temp_files)
+def main():
+    """Main application."""
+    # Initialize
+    init_session_state()
+    
+    # Layout
+    left_col, right_col = st.columns([3, 7])
+    
+    with left_col:
+        render_left_column()
+    
+    with right_col:
+        render_right_column()
+    
+    # Sidebar
+    render_sidebar()
 
-# Footer
-st.sidebar.divider()
-st.sidebar.caption("📊 Cuxfilter Dashboard Agent v1.0")
-st.sidebar.caption("GPU-Accelerated Dashboards with RAPIDS")
+if __name__ == "__main__":
+    main()
