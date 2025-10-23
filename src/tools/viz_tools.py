@@ -326,10 +326,21 @@ class VizTools:
     def list_layouts(self) -> Dict[str, str]:
         """List available layouts."""
         return {
-            "single_feature": "1 chart",
-            "double_feature": "2 charts side-by-side",
-            "triple_feature": "3 charts",
-            "quad_feature": "4 charts in grid"
+                "single_feature": "1 chart",
+                "feature_base": "1 feature chart and 1 base chart",
+                "double_feature": "2 charts",
+                "left_feature_right_double": "1 feature chart on the left and 2 charts on the right",
+                "triple_feature": "3 charts",
+                "feature_and_double_base": "1 feature chart and 2 base charts",
+                "two_by_two": "4 charts",
+                "feature_and_triple_base": "1 feature chart and 3 base charts",
+                "feature_and_quad_base": "1 feature chart and 4 base charts",
+                "feature_and_five_edge": "1 feature chart and 5 edge charts",
+                "two_by_three": "2x3 charts",
+                "double_feature_quad_base": "2 feature charts and 4 base charts",
+                "three_by_three": "3x3 charts",
+                "auto": "Automatic selection",
+                "grid": "Automatic selection"
         }
     
     # ═══════════════════════════════════════════════════════════════════════

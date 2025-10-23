@@ -22,6 +22,68 @@ from src.chat_agent import ChatAgent
 from src.tools.exp_store import VizExperimentStore
 
 # ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def load_data_preview(filepath: str):
+    """
+    Load data preview for UI display.
+    Uses same logic as viz_tools.load_data() but returns pandas DataFrame for preview.
+    """
+    try:
+        filepath = Path(filepath)
+        if not filepath.exists():
+            print(f"File not found: {filepath}")
+            return None
+        
+        # Mirror viz_tools.load_data() logic
+        if filepath.suffix == '.csv':
+            df = pd.read_csv(str(filepath))
+        elif filepath.suffix == '.parquet':
+            df = pd.read_parquet(str(filepath))
+        elif filepath.suffix == '.json':
+            df = pd.read_json(str(filepath))
+        elif filepath.suffix == '.arrow':
+            # For Arrow files, try multiple methods
+            try:
+                import pyarrow as pa
+                # Method 1: Try IPC file reader
+                with pa.memory_map(str(filepath), 'r') as source:
+                    table = pa.ipc.open_file(source).read_all()
+                df = table.to_pandas()
+            except Exception as e1:
+                print(f"Arrow method 1 failed: {e1}")
+                try:
+                    # Method 2: Try direct IPC open
+                    import pyarrow.ipc as ipc
+                    with pa.OSFile(str(filepath), 'r') as f:
+                        reader = ipc.open_file(f)
+                        table = reader.read_all()
+                    df = table.to_pandas()
+                except Exception as e2:
+                    print(f"Arrow method 2 failed: {e2}")
+                    # Method 3: Try feather (alternative Arrow format)
+                    try:
+                        import pyarrow.feather as feather
+                        table = feather.read_table(str(filepath))
+                        df = table.to_pandas()
+                    except Exception as e3:
+                        print(f"Arrow method 3 failed: {e3}")
+                        print(f"All Arrow loading methods failed. Cannot preview Arrow file.")
+                        return None
+        else:
+            print(f"Unsupported file type: {filepath.suffix}")
+            return None
+        
+        return df
+    
+    except Exception as e:
+        print(f"Preview load error for {filepath}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+# ============================================================================
 # PAGE CONFIG
 # ============================================================================
 
@@ -85,6 +147,9 @@ def init_session_state():
     
     if 'pending_input' not in st.session_state:
         st.session_state.pending_input = None
+    
+    if 'last_viz_file' not in st.session_state:
+        st.session_state.last_viz_file = None
 
 # ============================================================================
 # LEFT COLUMN - FILE MANAGEMENT
@@ -121,32 +186,55 @@ def render_left_column():
                 # Check if already loaded
                 if file_key not in st.session_state.uploaded_files:
                     try:
-                        # Load file info
-                        if file_path.endswith('.parquet'):
-                            df = pd.read_parquet(file_path)
-                        elif file_path.endswith('.arrow'):
-                            df = pd.read_feather(file_path)
-                        else:
-                            df = pd.read_csv(file_path)
-                        
                         file_size = os.path.getsize(file_path)
                         
-                        st.session_state.uploaded_files[file_key] = {
-                            'path': file_path,
-                            'name': file_name,
-                            'size': file_size,
-                            'shape': df.shape,
-                            'columns': list(df.columns)
-                        }
-                        
-                        # Load data into viz_tools
-                        result = st.session_state.agent.viz_tools.load_data(file_path)
-                        
-                        if result['success']:
-                            st.success(f"✅ Loaded {file_name}")
-                            st.rerun()
+                        # For Arrow files, load directly to viz_tools (skip pandas preview)
+                        if file_path.endswith('.arrow'):
+                            # Load data into viz_tools
+                            result = st.session_state.agent.viz_tools.load_data(file_path)
+                            
+                            # Check if result is dict (error) or cxf_df (success)
+                            if isinstance(result, dict) and not result.get('success', True):
+                                st.error(f"Error: {result['error']}")
+                            else:
+                                # Get info from viz_tools
+                                info = st.session_state.agent.viz_tools.get_data_info()
+                                
+                                st.session_state.uploaded_files[file_key] = {
+                                    'path': file_path,
+                                    'name': file_name,
+                                    'size': file_size,
+                                    'shape': info['shape'],
+                                    'columns': info['columns']
+                                }
+                                
+                                st.success(f"✅ Loaded {file_name}")
+                                st.rerun()
                         else:
-                            st.error(f"Error: {result['error']}")
+                            # For other formats, load preview first
+                            df = load_data_preview(file_path)
+                            
+                            if df is None:
+                                st.error(f"Could not load file for preview")
+                            else:
+                                st.session_state.uploaded_files[file_key] = {
+                                    'path': file_path,
+                                    'name': file_name,
+                                    'size': file_size,
+                                    'shape': df.shape,
+                                    'columns': list(df.columns)
+                                }
+                                
+                                # Load data into viz_tools
+                                result = st.session_state.agent.viz_tools.load_data(file_path)
+                                
+                                # Check if result is dict (error) or cxf_df (success)
+                                if isinstance(result, dict) and not result.get('success', True):
+                                    st.error(f"Error: {result['error']}")
+                                else:
+                                    # Success
+                                    st.success(f"✅ Loaded {file_name}")
+                                    st.rerun()
                         
                     except Exception as e:
                         st.error(f"Error loading file: {str(e)}")
@@ -188,18 +276,38 @@ def render_left_column():
                 
                 # Load and show basic info
                 try:
-                    if uploaded_file.name.endswith('.parquet'):
-                        df = pd.read_parquet(tmp_path)
-                    elif uploaded_file.name.endswith('.arrow'):
-                        df = pd.read_feather(tmp_path)
+                    # For Arrow files, load directly to viz_tools (skip pandas preview)
+                    if uploaded_file.name.endswith('.arrow'):
+                        # Load into viz_tools
+                        result = st.session_state.agent.viz_tools.load_data(tmp_path)
+                        
+                        # Check for errors
+                        if isinstance(result, dict) and not result.get('success', True):
+                            st.error(f"Error loading {uploaded_file.name}: {result['error']}")
+                            continue
+                        
+                        # Get info from viz_tools
+                        info = st.session_state.agent.viz_tools.get_data_info()
+                        st.session_state.uploaded_files[file_key]['shape'] = info['shape']
+                        st.session_state.uploaded_files[file_key]['columns'] = info['columns']
                     else:
-                        df = pd.read_csv(tmp_path)
-                    
-                    st.session_state.uploaded_files[file_key]['shape'] = df.shape
-                    st.session_state.uploaded_files[file_key]['columns'] = list(df.columns)
-                    
-                    # Load into viz_tools
-                    result = st.session_state.agent.viz_tools.load_data(tmp_path)
+                        # For other formats, load preview first
+                        df = load_data_preview(tmp_path)
+                        
+                        if df is None:
+                            st.error(f"Could not load {uploaded_file.name} for preview")
+                            continue
+                        
+                        st.session_state.uploaded_files[file_key]['shape'] = df.shape
+                        st.session_state.uploaded_files[file_key]['columns'] = list(df.columns)
+                        
+                        # Load into viz_tools
+                        result = st.session_state.agent.viz_tools.load_data(tmp_path)
+                        
+                        # Check for errors
+                        if isinstance(result, dict) and not result.get('success', True):
+                            st.error(f"Error loading {uploaded_file.name}: {result['error']}")
+                            continue
                     
                 except Exception as e:
                     st.error(f"Error loading {uploaded_file.name}: {str(e)}")
@@ -266,27 +374,50 @@ def render_left_column():
         - `bar` - Bar chart
         - `line` - Line chart
         - `scatter` - Scatter plot
-        - `histogram` - Histogram
+        - `stacked_lines` - Stacked line chart
         - `heatmap` - Heatmap
         
-        **Geographic:**
-        - `point_map` - Point map
-        - `hex_map` - Hexbin map
+        **Data Display:**
+        - `view_dataframe` - Data table
+        - `card` - Card display
+        - `number_chart` - Number display
+        
+        **Advanced:**
+        - `graph` - Network graph
+        - `choropleth` - Choropleth map
         
         **Widgets:**
         - `range_slider` - Range slider
-        - `dropdown` - Dropdown selector
+        - `date_range_slider` - Date range slider
+        - `float_slider` - Float slider
+        - `int_slider` - Integer slider
+        - `drop_down` - Dropdown selector
         - `multi_select` - Multi-select
         """)
     
     # Layouts reference
     with st.expander("📐 Layouts", expanded=False):
         st.markdown("""
-        - `single_feature` - 1 chart
-        - `double_feature` - 2 charts
-        - `triple_feature` - 3 charts
-        - `quad_feature` - 4 charts
-        - `auto` - Automatic selection
+        **Preset Layouts:**
+        - `single_feature`: 1 chart
+        - `feature_base`: 1 feature chart and 1 base chart
+        - `double_feature`: 2 charts
+        - `left_feature_right_double`: 1 feature chart on the left and 2 charts on the right
+        - `triple_feature`: 3 charts
+        - `feature_and_double_base`: 1 feature chart and 2 base charts
+        - `two_by_two`: 4 charts
+        - `feature_and_triple_base`: 1 feature chart and 3 base charts
+        - `feature_and_quad_base`: 1 feature chart and 4 base charts
+        - `feature_and_five_edge`: 1 feature chart and 5 edge charts
+        - `two_by_three`: 2x3 charts
+        - `double_feature_quad_base`: 2 feature charts and 4 base charts
+        - `three_by_three`: 3x3 charts
+        
+        **Dynamic Layouts:**
+        - `auto`: Automatic selection
+        - `grid`: Grid layout (specify cols with layout_cols parameter)
+        - `horizontal`: Single row
+        - `vertical`: Single column
         """)
     
     # Themes reference
@@ -295,7 +426,7 @@ def render_left_column():
         - `rapids_dark` - RAPIDS dark (default)
         - `rapids` - RAPIDS light
         - `dark` - Standard dark
-        - `light` - Standard light
+        - `default` - Default theme
         """)
 
 # ============================================================================
@@ -355,10 +486,32 @@ def render_right_column():
             except Exception as e:
                 st.error(f"Could not load stats: {e}")
     
-    # Display messages
-    for message in st.session_state.messages:
+    # Display messages with dashboard rendering
+    for idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            
+            # Display dashboard if this message has one
+            if message.get("viz_file"):
+                viz_path = Path(message["viz_file"])
+                if viz_path.exists():
+                    try:
+                        with open(viz_path, 'r', encoding='utf-8') as f:
+                            html_content = f.read()
+                        
+                        st.subheader("📊 Interactive Dashboard")
+                        components.html(html_content, height=800, scrolling=True)
+                        
+                        # Download button for each dashboard
+                        st.download_button(
+                            label="⬇️ Download Dashboard",
+                            data=html_content,
+                            file_name=viz_path.name,
+                            mime="text/html",
+                            key=f"download_{idx}"
+                        )
+                    except Exception as e:
+                        st.error(f"Error displaying dashboard: {e}")
     
     # Show input only if not processing
     if not st.session_state.is_processing:
@@ -406,6 +559,7 @@ def render_right_column():
                 # Check if dashboard was created
                 if result.get('viz_file'):
                     st.session_state.dashboard_created = True
+                    st.session_state.last_viz_file = result['viz_file']
                 
                 # Update processing message
                 response_placeholder.markdown("💭 Generating response...")
@@ -437,7 +591,7 @@ def render_right_column():
                     if viz_path.exists():
                         full_response += f"\n\n📊 **Dashboard:** {viz_path.name}"
                         
-                        # Read and display HTML
+                        # Read HTML
                         with open(viz_path, 'r', encoding='utf-8') as f:
                             html_content = f.read()
                         
@@ -457,18 +611,26 @@ def render_right_column():
                                     file_name=viz_path.name,
                                     mime="text/html"
                                 )
+                        
+                        # Save message with viz_file reference
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": full_response,
+                            "viz_file": str(viz_path)
+                        })
                     else:
                         full_response += "\n\n⚠️ Dashboard file not found"
+                        st.session_state.messages.append({"role": "assistant", "content": full_response})
                 
                 # Stream response (if no viz)
-                if not result.get('viz_file'):
+                else:
                     words = full_response.split()
                     for i in range(1, len(words) + 1):
                         partial_response = " ".join(words[:i])
                         response_placeholder.markdown(partial_response)
                         time.sleep(0.02)
-                
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
             
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
@@ -508,6 +670,26 @@ def render_sidebar():
             
             # Quick actions
             st.subheader("⚡ Quick Actions")
+            
+            # Download latest dashboard button
+            if st.session_state.last_viz_file:
+                viz_path = Path(st.session_state.last_viz_file)
+                if viz_path.exists():
+                    try:
+                        with open(viz_path, 'r', encoding='utf-8') as f:
+                            html_content = f.read()
+                        
+                        st.download_button(
+                            label="📥 Download Latest Dashboard",
+                            data=html_content,
+                            file_name=viz_path.name,
+                            mime="text/html",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                        st.caption(f"📄 {viz_path.name}")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
             
             if st.button("🔄 Reload Agent", use_container_width=True):
                 exp_store = VizExperimentStore()
