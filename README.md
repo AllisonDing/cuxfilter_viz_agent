@@ -19,7 +19,7 @@ Download the dataset and place it in the `data/` directory before running the ag
 This project requires the following versions to ensure full compatibility:<br>
 * cuxfilter: 25.10
 * RAPIDS: 25.10
-* Bokeh: ≤ 3.6.0
+* Bokeh: <= 3.6.0
 
 Please refer to the official [RAPIDS installation documentation](https://docs.rapids.ai/install/) for detailed instructions.
 
@@ -35,6 +35,8 @@ conda create -n rapids-25.10 -c rapidsai -c conda-forge -c nvidia  \
 The agent must be run in GPU mode:
 
 ```bash
+conda activate rapids-25.10
+export NVIDIA_API_KEY=""
 streamlit run user_interface.py
 ```
 
