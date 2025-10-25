@@ -19,6 +19,7 @@ import math
 
 import cudf
 import pandas as pd
+import cupy as cp
 import cuxfilter as cxf
 from cuxfilter import DataFrame, charts, layouts, themes
 from bokeh import palettes
@@ -39,6 +40,9 @@ class VizTools:
         # MODULE 2: DashBoard
         self.active_dashboard = None
         self.dashboard_counter = 0
+        
+        # Chart counter for individual view
+        self.chart_counter = 0
         
         self.use_gpu = self._check_gpu()
     
@@ -63,14 +67,38 @@ class VizTools:
             if filepath.suffix == '.csv':
                 self.df = cudf.read_csv(str(filepath))
                 self.cxf_df = cxf.DataFrame.from_dataframe(self.df)
+                size = len(self.cxf_df.data)
+                self.cxf_df.data['color'] = cp.random.randint(20,30, size=size)/100
+                self.cxf_df.data['elevation'] = cp.random.randint(0,1000, size=size)
+                self.cxf_df.data['color'] = self.cxf_df.data['color'].astype('float32')
+                self.cxf_df.data['elevation'] = self.cxf_df.data['elevation'].astype('float32')
+            
             elif filepath.suffix == '.parquet':
                 self.df = cudf.read_parquet(str(filepath))
                 self.cxf_df = cxf.DataFrame.from_dataframe(self.df)
+                size = len(self.cxf_df.data)
+                self.cxf_df.data['color'] = cp.random.randint(20,30, size=size)/100
+                self.cxf_df.data['elevation'] = cp.random.randint(0,1000, size=size)
+                self.cxf_df.data['color'] = self.cxf_df.data['color'].astype('float32')
+                self.cxf_df.data['elevation'] = self.cxf_df.data['elevation'].astype('float32')
+            
             elif filepath.suffix == '.json':
                 self.df = cudf.read_json(str(filepath))
                 self.cxf_df = cxf.DataFrame.from_dataframe(self.df)
+                size = len(self.cxf_df.data)
+                self.cxf_df.data['color'] = cp.random.randint(20,30, size=size)/100
+                self.cxf_df.data['elevation'] = cp.random.randint(0,1000, size=size)
+                self.cxf_df.data['color'] = self.cxf_df.data['color'].astype('float32')
+                self.cxf_df.data['elevation'] = self.cxf_df.data['elevation'].astype('float32')
+            
             elif filepath.suffix == '.arrow':
                 self.cxf_df = DataFrame.from_arrow(str(filepath))
+                size = len(self.cxf_df.data)
+                self.cxf_df.data['color'] = cp.random.randint(20,30, size=size)/100
+                self.cxf_df.data['elevation'] = cp.random.randint(0,1000, size=size)
+                self.cxf_df.data['color'] = self.cxf_df.data['color'].astype('float32')
+                self.cxf_df.data['elevation'] = self.cxf_df.data['elevation'].astype('float32')
+            
             else:
                 return {"success": False, "error": f"Unsupported type", "cxf_df": None}
             
@@ -104,25 +132,25 @@ class VizTools:
             
             layout = self.get_layout(layout_type, len(charts))
             theme = self.get_theme(theme_name)
+            
+            # Prepare dashboard arguments
+            dashboard_kwargs = {
+                'charts': charts,
+                'theme': theme,
+                'title': title
+            }
+            
+            # Only add sidebar if it has items
+            if sidebar and len(sidebar) > 0:
+                dashboard_kwargs['sidebar'] = sidebar
 
             # For preset layouts, use 'layout' parameter
             if isinstance(layout, list):
-                self.active_dashboard = self.cxf_df.dashboard(
-                    charts=charts, 
-                    sidebar=sidebar,
-                    layout_array=layout,  # Use layout_array for custom layouts
-                    theme=theme, 
-                    title=title
-                )
+                dashboard_kwargs['layout_array'] = layout
             else:
-                self.active_dashboard = self.cxf_df.dashboard(
-                    charts=charts, 
-                    sidebar=sidebar,
-                    layout=layout,  # Use layout for presets
-                    theme=theme, 
-                    title=title
-                )
+                dashboard_kwargs['layout'] = layout
             
+            self.active_dashboard = self.cxf_df.dashboard(**dashboard_kwargs)
             self.dashboard_counter += 1
 
             return self.active_dashboard           
@@ -144,6 +172,105 @@ class VizTools:
             self.active_dashboard.app().save(str(filepath))
             
             return {"success": True, "filepath": str(filepath)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def export_chart(self, chart: Any, filename: str) -> Dict[str, Any]:
+        """
+        Export a single chart to HTML.
+        
+        Creates a dashboard with the chart, then uses chart.view().save().
+        This is the correct cuxfilter pattern.
+        
+        Args:
+            chart: Chart object to export
+            filename: Output filename (e.g., 'chart_1.html')
+            
+        Returns:
+            Dict with success status and filepath
+        """
+        try:
+            if not self.cxf_df:
+                return {"success": False, "error": "No data loaded"}
+            
+            filepath = os.path.join(self.output_dir, filename)
+            
+            # Step 1: Create dashboard with the chart (required!)
+            temp_dashboard = self.cxf_df.dashboard(
+                charts=[chart],
+                layout=cxf.layouts.single_feature,
+                theme=cxf.themes.rapids_dark,
+                title="Chart"
+            )
+            
+            # Step 2: Now chart.view().save() will work
+            chart.view().save(str(filepath))
+            
+            return {"success": True, "filepath": str(filepath)}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def view_chart(self, chart: Any, title: str = "Chart View", theme_name: str = "rapids_dark", 
+                   filename: Optional[str] = None, export: bool = True) -> Dict[str, Any]:
+        """
+        View a single chart as a standalone dashboard.
+        
+        Args:
+            chart: Chart object created by create_*_chart methods
+            title: Title for the single-chart dashboard
+            theme_name: Theme to use (rapids_dark, rapids, dark, default)
+            filename: Optional filename for export (auto-generated if None)
+            export: Whether to export to HTML (default: True)
+        
+        Returns:
+            Dict with dashboard object and export info
+        
+        Example:
+            scatter = viz_tools.create_scatter_chart(x="col1", y="col2", title="My Scatter")
+            result = viz_tools.view_chart(scatter, title="Scatter Plot View")
+            # Opens/exports single scatter plot
+        """
+        try:
+            if not self.cxf_df:
+                return {"success": False, "error": "No cuxfilter DataFrame loaded"}
+            
+            if not chart:
+                return {"success": False, "error": "No chart provided"}
+            
+            # Create single-chart dashboard
+            theme = self.get_theme(theme_name)
+            
+            single_chart_dashboard = self.cxf_df.dashboard(
+                charts=[chart],
+                layout=cxf.layouts.single_feature,
+                theme=theme,
+                title=title
+            )
+            
+            self.chart_counter += 1
+            
+            result = {
+                "success": True,
+                "dashboard": single_chart_dashboard,
+                "chart_number": self.chart_counter
+            }
+            
+            # Export if requested
+            if export:
+                if not filename:
+                    filename = f"chart_{self.chart_counter}.html"
+                
+                filepath = os.path.join(self.output_dir, filename)
+                single_chart_dashboard.app().save(str(filepath))
+                
+                result["exported"] = True
+                result["filepath"] = str(filepath)
+            else:
+                result["exported"] = False
+            
+            return result
+            
         except Exception as e:
             return {"success": False, "error": str(e)}
     
@@ -208,6 +335,21 @@ class VizTools:
         """cuxfilter.charts.view_dataframe([column names])"""
         return cxf.charts.view_dataframe(x)
     
+    def create_2d_choropleth(self, x: str, geoJSONSource: str, color_column: str = "color", color_aggregate_fn: str = "mean", 
+                         add_interaction: bool = True) -> Any:
+        """cuxfilter.charts.choropleth()"""
+        return cxf.charts.choropleth(x=x, color_column=color_column, color_aggregate_fn=color_aggregate_fn,
+                                geoJSONSource=geoJSONSource, add_interaction=True)
+
+    def create_3d_choropleth(self, x: str, geoJSONSource: str, color_column: str = "color", color_aggregate_fn: str = "mean", 
+                            elevation_column: str = "elevation", elevation_factor: int = 1000, elevation_aggregate_fn: str = "mean",
+                            add_interaction: bool = True) -> Any:
+        """cuxfilter.charts.choropleth()"""
+        return cxf.charts.choropleth(x=x, color_column=color_column, color_aggregate_fn=color_aggregate_fn,
+                                    elevation_column=elevation_column, elevation_factor=elevation_factor, 
+                                    elevation_aggregate_fn=elevation_aggregate_fn, geoJSONSource=geoJSONSource, 
+                                    add_interaction=True)
+
     # ═══════════════════════════════════════════════════════════════════════
     # MODULE 4: cuxfilter.layouts
     # ═══════════════════════════════════════════════════════════════════════
@@ -228,57 +370,83 @@ class VizTools:
             Layout preset object or custom layout array
         """
 
-        import math
-    
-        # Preset layouts mapping
-        presets = {
-            'single_feature': cxf.layouts.single_feature,
-            'feature_and_base': cxf.layouts.feature_and_base,
-            'double_feature': cxf.layouts.double_feature,
-            'left_feature_right_double': cxf.layouts.left_feature_right_double,
-            'triple_feature': cxf.layouts.triple_feature,
-            'feature_and_double_base': cxf.layouts.feature_and_double_base,
-            'two_by_two': cxf.layouts.two_by_two,
-            'feature_and_triple_base': cxf.layouts.feature_and_triple_base,
-            'feature_and_quad_base': cxf.layouts.feature_and_quad_base,
-            'feature_and_five_edge': cxf.layouts.feature_and_five_edge,
-            'two_by_three': cxf.layouts.two_by_three,
-            'double_feature_quad_base': cxf.layouts.double_feature_quad_base,
-            'three_by_three': cxf.layouts.three_by_three
-        }
+        # Preset layouts
+        if layout_type == 'single_feature':
+            return cxf.layouts.single_feature
+        elif layout_type == 'feature_base':
+            return cxf.layouts.feature_and_base
+        elif layout_type == 'double_feature':
+            return cxf.layouts.double_feature
+        elif layout_type == 'left_feature_right_double':
+            return cxf.layouts.left_feature_right_double
+        elif layout_type == 'triple_feature':
+            return cxf.layouts.triple_feature
+        elif layout_type == 'feature_and_double_base':
+            return cxf.layouts.feature_and_double_base
+        elif layout_type == 'two_by_two':
+            return cxf.layouts.two_by_two
+        elif layout_type == 'feature_and_triple_base':
+            return cxf.layouts.feature_and_triple_base
+        elif layout_type == 'feature_and_quad_base':
+            return cxf.layouts.feature_and_quad_base
+        elif layout_type == 'feature_and_five_edge':
+            return cxf.layouts.feature_and_five_edge
+        elif layout_type == 'two_by_three':
+            return cxf.layouts.two_by_three
+        elif layout_type == 'double_feature_quad_base':
+            return cxf.layouts.double_feature_quad_base
+        elif layout_type == 'three_by_three':
+            return cxf.layouts.three_by_three
         
-        # Return preset if available
-        if layout_type in presets:
-            return presets[layout_type]
-        
-        # Auto-select based on number of charts
-        if layout_type == 'auto':
+        # Dynamic layouts
+        elif layout_type == 'auto':
             if num_charts is None:
                 raise ValueError("num_charts required for 'auto' layout")
             
             if num_charts == 1:
-                return presets['single_feature']
+                return cxf.layouts.single_feature
             elif num_charts == 2:
-                return presets['double_feature']
+                return cxf.layouts.double_feature
             elif num_charts == 3:
-                return presets['triple_feature']
+                return cxf.layouts.triple_feature
             elif num_charts == 4:
-                return presets['two_by_two']
+                return cxf.layouts.two_by_two
             elif num_charts <= 6:
-                return presets['two_by_three']
+                return cxf.layouts.two_by_three
             elif num_charts <= 9:
-                return presets['three_by_three']
+                return cxf.layouts.three_by_three
             else:
-                # Fall back to grid for many charts
-                layout_type = 'grid'      
-
-        # Custom layout arrays
-        if num_charts is None:
-            raise ValueError(f"num_charts required for '{layout_type}' layout")
+                # Fall back to grid layout for >9 charts
+                cols = 3
+                rows = math.ceil(num_charts / cols)
+                
+                layout = []
+                chart_idx = 1
+                
+                for row in range(rows):
+                    row_layout = []
+                    for col in range(cols):
+                        if chart_idx <= num_charts:
+                            row_layout.extend([chart_idx] * 2)
+                            chart_idx += 1
+                    
+                    if row_layout:
+                        expected_width = cols * 2
+                        current_width = len(row_layout)
+                        
+                        if current_width < expected_width and row == rows - 1:
+                            padding_needed = expected_width - current_width
+                            row_layout.extend([row_layout[-1]] * padding_needed)
+                        
+                        layout.append(row_layout)
+                
+                return layout
         
-        if layout_type == 'grid':
-            # Balanced grid layout with consistent row widths
-            cols = math.ceil(math.sqrt(num_charts))
+        elif layout_type == 'grid':
+            if num_charts is None:
+                raise ValueError("num_charts required for 'grid' layout")
+            
+            cols = 2 if num_charts <= 4 else 3
             rows = math.ceil(num_charts / cols)
             
             layout = []
@@ -286,6 +454,7 @@ class VizTools:
             
             for row in range(rows):
                 row_layout = []
+                
                 # Calculate how many charts go in this row
                 remaining_charts = num_charts - chart_idx + 1
                 charts_in_row = min(cols, remaining_charts)

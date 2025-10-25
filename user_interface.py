@@ -354,8 +354,8 @@ def render_left_column():
         st.session_state.is_processing = True
         st.rerun()
     
-    if st.button("📈 'Create histogram'", use_container_width=True):
-        st.session_state.pending_input = "Create a histogram of the first numeric column"
+    if st.button("📈 'Create a bar chart'", use_container_width=True):
+        st.session_state.pending_input = "Create a standalone bar chart"
         st.session_state.is_processing = True
         st.rerun()
     
@@ -374,17 +374,13 @@ def render_left_column():
         - `bar` - Bar chart
         - `line` - Line chart
         - `scatter` - Scatter plot
-        - `stacked_lines` - Stacked line chart
         - `heatmap` - Heatmap
         
         **Data Display:**
         - `view_dataframe` - Data table
-        - `card` - Card display
-        - `number_chart` - Number display
-        
+
         **Advanced:**
-        - `graph` - Network graph
-        - `choropleth` - Choropleth map
+        - `choropleth` - 2D/3D Choropleth map
         
         **Widgets:**
         - `range_slider` - Range slider
@@ -393,6 +389,7 @@ def render_left_column():
         - `int_slider` - Integer slider
         - `drop_down` - Dropdown selector
         - `multi_select` - Multi-select
+        - `number_chart` - Number display
         """)
     
     # Layouts reference
@@ -416,17 +413,15 @@ def render_left_column():
         **Dynamic Layouts:**
         - `auto`: Automatic selection
         - `grid`: Grid layout (specify cols with layout_cols parameter)
-        - `horizontal`: Single row
-        - `vertical`: Single column
         """)
     
     # Themes reference
     with st.expander("🎨 Themes", expanded=False):
         st.markdown("""
-        - `rapids_dark` - RAPIDS dark (default)
-        - `rapids` - RAPIDS light
-        - `dark` - Standard dark
-        - `default` - Default theme
+        - `rapids_dark` - RAPIDS dark
+        - `rapids` - RAPIDS
+        - `dark` - Dark
+        - `default` - Default
         """)
 
 # ============================================================================
